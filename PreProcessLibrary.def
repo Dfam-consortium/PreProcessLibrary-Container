@@ -1,0 +1,244 @@
+Bootstrap: library
+From: ubuntu:22.04
+
+%environment
+    export LC_ALL=C
+    export REPEATMODELER_DIR=/opt/RepeatModeler
+
+%setup
+    rm -rf ./Dfam-umbrella
+
+    set -eu
+
+    download() {
+        src="$1"
+        shift
+
+        if [ $# -ge 1 ]; then
+            name="$1"
+        else
+            name="${src##*/}"
+        fi
+
+        dest="src/$name"
+
+        if [ -n "${ALWAYS-}" ] || ! [ -f "$dest" ]; then
+            echo "Downloading $src to $dest"
+            curl -sSL "$src" > "$dest"
+        fi
+    }
+
+    mkdir -p src
+
+    download https://www.repeatmasker.org/rmblast-2.11.0+-x64-linux.tar.gz
+    download http://eddylab.org/software/hmmer/hmmer-3.3.2.tar.gz
+    download https://www.repeatmasker.org/RepeatScout-1.0.6.tar.gz
+    download https://www.repeatmasker.org/RepeatModeler/RECON-1.08.tar.gz
+    download https://github.com/weizhongli/cdhit/releases/download/V4.8.1/cd-hit-v4.8.1-2019-0228.tar.gz
+    download https://github.com/genometools/genometools/archive/v1.6.0.tar.gz gt-1.6.0.tar.gz
+    download https://github.com/oushujun/LTR_retriever/archive/v2.9.0.tar.gz LTR_retriever-2.9.0.tar.gz
+    download https://mafft.cbrc.jp/alignment/software/mafft-7.471-without-extensions-src.tgz
+    download https://github.com/TravisWheelerLab/NINJA/archive/0.97-cluster_only.tar.gz NINJA-cluster.tar.gz
+    download https://www.repeatmasker.org/coseg-0.2.2.tar.gz
+    download https://www.repeatmasker.org/RepeatMasker/RepeatMasker-4.1.3-p1.tar.gz
+    download https://github.com/Dfam-consortium/RepeatModeler/archive/2.0.3.tar.gz RepeatModeler-2.0.3.tar.gz
+
+    git clone https://github.com/Dfam-consortium/Dfam-umbrella.git ./Dfam-umbrella
+    cp ./Dfam-umbrella/Conf/template.conf ./Dfam-umbrella/Conf/dfam.conf
+    git clone https://github.com/Dfam-consortium/Internal-Use-Schemata.git ./Dfam-umbrella/Schemata
+
+    # TODO: /exe/ only includes binaries of the "latest" version at the time of download.
+    # The version listed in README.md is obtained by running 'strings src/faToTwoBit | grep kent'
+    # On whatever was downloaded.
+    # Consider building these tools from source instead.
+    for tool in faToTwoBit twoBitInfo twoBitToFa; do
+    download https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/"$tool"
+    done
+
+%files
+    ./Dfam-umbrella/Server/preprocessLibrary.py           /opt/ppl/preprocessLibrary.py
+    ./Dfam-umbrella/Server/fasta-trf-filter.py            /opt/ppl/fasta-trf-filter.py
+    ./Dfam-umbrella/Server/extend-stk.pl                  /opt/ppl/extend-stk.pl
+    ./Dfam-umbrella/Server/ExtendAlign                    /opt/ppl/ExtendAlign
+    ./Dfam-umbrella/Lib/DfamConfig.py                     /opt/Lib/DfamConfig.py
+    ./Dfam-umbrella/Lib/DfamVersion.py                    /opt/Lib/DfamVersion.py
+    ./Dfam-umbrella/Lib/DfamSeedAlignment.py              /opt/Lib/DfamSeedAlignment.py
+    ./Dfam-umbrella/Lib/DfamDBView.py                     /opt/Lib/DfamDBView.py
+    ./Dfam-umbrella/Lib/MultAlign.py                      /opt/Lib/MultAlign.py
+    ./Dfam-umbrella/Lib/MultipleSeqAlign.py               /opt/Lib/MultipleSeqAlign.py
+    ./Dfam-umbrella/Lib/Sequence.py                       /opt/Lib/Sequence.py
+    ./Dfam-umbrella/Lib/DNAPairwiseAlignmentCollection.py /opt/Lib/DNAPairwiseAlignmentCollection.py
+    ./Dfam-umbrella/Lib/DNAPairwiseAlignment.py           /opt/Lib/DNAPairwiseAlignment.py
+    ./Dfam-umbrella/Lib/SubstitutionMatrix.py             /opt/Lib/SubstitutionMatrix.py
+    ./Dfam-umbrella/Lib/ConsensusCaller.py                /opt/Lib/ConsensusCaller.py
+    ./Dfam-umbrella/Schemata/ORMs/python/dfamorm.py       /opt/Schemata/ORMs/python/dfamorm.py
+    ./Dfam-umbrella/Conf/dfam.conf                        /opt/Conf/dfam.conf
+    
+    ./src/                                                /opt/
+
+%post
+    # basic dependencies
+    apt-get -y update \
+    && apt-get -y install \
+        make \
+        gcc \
+        g++ \
+        libz-dev \
+        python3 \
+        python3-numpy \
+        python3-requests \
+        python3-sqlalchemy \
+        python3-h5py \
+        perl \
+        libfile-which-perl \
+        libtext-soundex-perl \
+        libjson-perl liburi-perl libwww-perl \
+        libdevel-size-perl \
+        vim \
+
+    # Intstall TRF
+    apt-get -y install trf
+    
+    # Extract RMBlast
+    cd /opt \
+    && mkdir rmblast \
+    && tar --strip-components=1 -x -f src/rmblast-2.11.0+-x64-linux.tar.gz -C rmblast \
+
+    # Compile HMMER
+    cd /opt \
+    && mkdir hmmer-3.3.2 \
+    && tar --strip-components=1 -x -f src/hmmer-3.3.2.tar.gz -C hmmer-3.3.2\
+    && cd hmmer-3.3.2 \
+    && ./configure --prefix=/opt/hmmer && make && make install \
+    && make clean
+
+    # Compile RepeatScout
+    cd /opt \
+    && mkdir RepeatScout-1.0.6 \
+    && tar -x -f src/RepeatScout-1.0.6.tar.gz \
+    && cd RepeatScout-1.0.6 \
+    && sed -i 's#^INSTDIR =.*#INSTDIR = /opt/RepeatScout#' Makefile \
+    && make && make install \
+    && make clean
+
+    # Compile and configure RECON
+    cd /opt \
+    && tar -x -f src/RECON-1.08.tar.gz \
+    && cd /opt/RECON-1.08 \
+    && make -C src && make -C src install \
+    && cp 00README bin/ \
+    && sed -i 's#^\$path =.*#$path = "/opt/RECON/bin";#' scripts/recon.pl
+
+    # Compile cd-hit
+    cd /opt \
+    tar -x -f src/cd-hit-v4.8.1-2019-0228.tar.gz \
+    && cd cd-hit-v4.8.1-2019-0228 \
+    && make && mkdir /opt/cd-hit && PREFIX=/opt/cd-hit make install \
+    && make cleanup
+
+    # Compile genometools (for ltrharvest)
+    cd /opt \
+    tar -x -f src/gt-1.6.0.tar.gz \
+    && cd genometools-1.6.0 \
+    && make -j4 cairo=no && make cairo=no prefix=/opt/genometools install \
+    && make cleanup
+
+    # Configure LTR_retriever
+    cd /opt \
+    && tar -x -f src/LTR_retriever-2.9.0.tar.gz \
+    && mv LTR_retriever-2.9.0 LTR_retriever \
+    && cd LTR_retriever \
+    && sed -i \
+        -e 's#BLAST+=#BLAST+=/opt/rmblast/bin#' \
+        -e 's#RepeatMasker=#RepeatMasker=/opt/RepeatMasker#' \
+        -e 's#HMMER=#HMMER=/opt/hmmer/bin#' \
+        -e 's#CDHIT=#CDHIT=/opt/cd-hit#' \
+        paths
+
+    # Compile MAFFT
+    cd /opt \
+    tar -x -f src/mafft-7.471-without-extensions-src.tgz \
+    && cd mafft-7.471-without-extensions/core \
+    && sed -i 's#^PREFIX =.*#PREFIX = /opt/mafft#' Makefile \
+    && make clean && make && make install \
+    && make clean
+
+    # Compile NINJA
+    cd /opt \
+    && mkdir NINJA \
+    && tar --strip-components=1 -x -f src/NINJA-cluster.tar.gz -C NINJA \
+    && cd NINJA/NINJA \
+    && make clean && make all \
+    && make clean
+
+    # Move UCSC tools
+    cd /opt \
+    && mkdir /opt/ucsc_tools \
+    && mv src/faToTwoBit src/twoBitInfo src/twoBitToFa  /opt/ucsc_tools \
+    && chmod +x /opt/ucsc_tools/*
+
+    # Configure RepeatMasker
+    cd /opt \
+    && tar -x -f src/RepeatMasker-4.1.3-p1.tar.gz \
+    && chmod a+w RepeatMasker/Libraries \
+    && cd RepeatMasker \
+    && perl configure \
+        -hmmer_dir=/opt/hmmer/bin \
+        -rmblast_dir=/opt/rmblast/bin \
+        -libdir=/opt/RepeatMasker/Libraries \
+        -trf_prgm=/usr/bin/trf \
+        -default_search_engine=rmblast \
+
+    # Configure RepeatModeler
+    cd /opt \
+    && tar -x -f src/RepeatModeler-2.0.3.tar.gz \
+    && mv RepeatModeler-2.0.3 RepeatModeler \
+    && cd RepeatModeler \
+    && perl configure \
+         -cdhit_dir=/opt/cd-hit \
+         -genometools_dir=/opt/genometools/bin \
+         -ltr_retriever_dir=/opt/LTR_retriever \
+         -mafft_dir=/opt/mafft/bin \
+         -ninja_dir=/opt/NINJA/NINJA \
+         -recon_dir=/opt/RECON/bin \
+         -repeatmasker_dir=/opt/RepeatMasker \
+         -rmblast_dir=/opt/rmblast/bin \
+         -rscout_dir=/opt/RepeatScout \
+         -trf_dir=/opt \
+         -ucsctools_dir=/opt/ucsc_tools
+
+    rm -rf /opt/src
+
+    chmod -R +r /opt
+
+    # Modify dfam.conf
+    sed -i "s/\"ucsc_utils_bin\": \"\/usr\/local\/bin\",/\"ucsc_utils_bin\": \"\/opt\/ucsc_tools\",/" /opt/Conf/dfam.conf
+    sed -i "s/\/usr\/local\/RepeatModeler/\/opt\/RepeatModeler/" /opt/Conf/dfam.conf
+
+    # NextFlow dependencies
+    # apt-get -y install curl
+    # apt-get -y install default-jre
+    # curl -s https://get.nextflow.io | bash
+    # ensure access to working files
+
+%apprun setup
+    /opt/ppl/preprocessLibrary.py setup "$@"
+
+%apprun ebi
+    /opt/ppl/preprocessLibrary.py ebi -a "$@"
+
+%runscript
+    /opt/ppl/preprocessLibrary.py run "$@"
+
+%help
+    This container contains dependencies to run preprocessLibrary.py run <args>
+    If relative paths are used during setup, container can be run from the same directory.
+    Abolute file paths will require bindings.
+    -> singularity run <Container> <steps>
+
+    Apps:
+    setup - preprocessLibrary.py setup "$@"
+    -> singularity run --app setup <Container>
+
+    ebi - preprocessLibrary.py ebi -a "$@"
+    -> singularity run --app ebi <Container> <accession#> <accession#.families.stk.gz>
